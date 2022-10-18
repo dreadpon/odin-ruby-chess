@@ -1,3 +1,7 @@
+require_relative 'input_error.rb'
+require_relative 'shared_utility.rb'
+
+
 class BoardPrinter
 	attr_reader :piece_lookup
 
@@ -28,20 +32,11 @@ class BoardPrinter
 		}
 	end
 
-
-	def file_index_to_letter(index)
-		a_codepoint = 'a'.codepoints[0]
-		letter_limits = [a_codepoint, a_codepoint + @board_size - 1]
-		raise InputError.new('Invalid board index') unless (1..@board_size).cover?(index)
-		return (letter_limits[0] - 1 + index).chr(Encoding::UTF_8)
-	end
-
-
 	def print_board_blueprint()
 		@board_size.downto(1) do |rank|
 			puts Array.new(@total_columns, '-').join('')
 			for row in (1..@cell_height) do
-				if row == (@cell_height / 2.0).ceil
+				if row == (@cell_height / 2.0).ceil.to_i
 					half_field = Array.new(@cell_width / 2, ' ').join('')
 					print half_field + rank.to_s + half_field
 				else
@@ -54,10 +49,10 @@ class BoardPrinter
 
 		for row in (1..@cell_height) do
 			print Array.new(@cell_width, ' ').join('')
-			if row == (@cell_height / 2.0).ceil
+			if row == (@cell_height / 2.0).ceil.to_i
 				half_field = Array.new(@cell_width / 2, ' ').join('')
 				file = 0
-				puts "|" + Array.new(@board_size) { file += 1; half_field + file_index_to_letter(file).upcase + half_field + '|' }.join('')
+				puts "|" + Array.new(@board_size) { file += 1; half_field + Utility.file_index_to_letter(file).upcase + half_field + '|' }.join('')
 			else
 				puts "|" + Array.new(@board_size, Array.new(@cell_width, ' ').join('')  + "|").join('')
 			end
@@ -133,14 +128,6 @@ class BoardPrinter
 	end
 
 
-	def file_index_to_letter(index)
-		a_codepoint = 'a'.codepoints[0]
-		letter_limits = [a_codepoint, a_codepoint + @board_size - 1]
-		raise InputError.new('Invalid board index') unless (1..@board_size).cover?(index)
-		return (letter_limits[0] - 1 + index).chr(Encoding::UTF_8)
-	end
-
-
 	def iterate_over_rows(row_offset = 8)
 		return unless block_given?
 		print "\r"
@@ -181,72 +168,78 @@ class BoardPrinter
 	end
 
 
-	# TODO: remove hardcoded '#'
-	def place_pieces(board_arr, row_offset = 8)
+	def iterate_board(board_arr)
+		return unless block_given?
 		for rank in (0...board_arr.length) do
 			for file in (0...board_arr[rank].length) do
-				next if board_arr[rank][file] == 0
-				unless board_arr[rank][file] > 10
-					set_file([file, rank], [
-						"       ",
-						" #{@piece_lookup[board_arr[rank][file]]} ",
-						"       "
-					], row_offset)
-				else
-					set_file([file, rank], [
-						"░░░░░░░",
-						"░#{@piece_lookup[board_arr[rank][file]]}░",
-						"░░░░░░░"
-					], row_offset)
-				end
+				yield(rank, file)
+			end
+		end
+	end
+
+
+	def mk_file_array(content, top_chars, side_chars, bot_chars)
+		array = []
+		content_line = (@cell_height / 2.0).ceil.to_i
+		content_string = "#{content}"
+		if content_string.length > @cell_width - 2
+			content_string = content_string.slice(0, @cell_width - 3)
+		end
+		content_string = content_string.ljust(@cell_width - 3, '#')
+		content_string = content_string.rjust(@cell_width - 2, '#')
+
+		for line in (1..@cell_height) do
+			if line == 1
+				array.push(top_chars[0] + Array.new(@cell_width - 2, top_chars[1]).join('').slice(0, @cell_width - 2) + top_chars[2])
+			elsif line == content_line
+				array.push(side_chars[0] + content_string + side_chars[1])
+			elsif line == @cell_height
+				array.push(bot_chars[0] + Array.new(@cell_width - 2, bot_chars[1]).join('').slice(0, @cell_width - 2) + bot_chars[2])
+			else
+				array.push(side_chars[0] + Array.new(@cell_width - 2, '#').join('') + side_chars[1])
+			end
+		end
+		return array
+	end
+
+
+	def place_pieces(board_arr, row_offset = 8)
+		iterate_board(board_arr) do |rank, file|
+			next if board_arr[rank][file] == 0
+			piece_string = @piece_lookup[board_arr[rank][file]]
+			unless board_arr[rank][file] > 10
+				set_file([file, rank], 
+					mk_file_array(piece_string, [' ', ' ', ' '], [' ', ' '], [' ', ' ', ' ']), 
+					row_offset)
+			else
+				set_file([file, rank], 
+					mk_file_array(piece_string, ['░', '░', '░'], ['░', '░'], ['░', '░', '░']), 
+					row_offset)
 			end
 		end
 		STDOUT.flush
 	end
 
 	
-	# TODO: remove hardcoded length
 	def show_moveable_pieces(coord_array, row_offset = 8)
 		for coord in coord_array
-			set_file(coord, [
-				'▓▓▓▓▓▓▓',
-				'▓#####▓',
-				'▓▓▓▓▓▓▓',
-			], row_offset)
+			set_file(coord, 
+				mk_file_array('', ['▓', '▓', '▓'], ['▓', '▓'], ['▓', '▓', '▓']),
+				row_offset)
 		end
 		STDOUT.flush
 	end
 
 
-	# TODO: remove hardcoded length
 	def show_target_squares(coord_array_with_text, row_offset = 8)
 		for coord_with_text in coord_array_with_text
 			text = "#####"
 			if coord_with_text.length >= 3
 				text = coord_with_text[2]
 			end
-			set_file([coord_with_text[0], coord_with_text[1]], [
-				'\\#####/',
-				'-#####-',
-				"/#{text}\\",
-			], row_offset)
-		end
-		STDOUT.flush
-	end
-
-
-	# TODO: remove hardcoded '#'
-	def show_forbidden_squares(coord_array_with_text, row_offset = 8)
-		for coord_with_text in coord_array_with_text
-			text = "×××××"
-			if coord_with_text.length >= 3
-				text = coord_with_text[2]
-			end
-			set_file([coord_with_text[0], coord_with_text[1]], [
-				'×××××××',
-				'×#####×',
-				"×#{text}×",
-			], row_offset)
+			set_file([coord_with_text[0], coord_with_text[1]],
+				mk_file_array('', ['\\', '#', '/'], ['-', '-'], ['/', text, '\\']),
+				row_offset)
 		end
 		STDOUT.flush
 	end

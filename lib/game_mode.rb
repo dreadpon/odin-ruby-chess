@@ -1,5 +1,6 @@
 require_relative 'board.rb'
 require_relative 'board_printer.rb'
+require_relative 'piece_moves.rb'
 require 'json'
 
 
@@ -19,20 +20,21 @@ class GameMode
 		@player_direction = 1
 
 		@action_list = {
-			'help' => 'returns a list of available actions',
-			'move' => 'initiate piece moving sequence',
-			'resign' => 'resign (concede) the game',
-			'draw' => 'claim a draw if game is dragging for more than 50 turns',
-			'quit' => 'quit the game',
-			'save' => 'save board to file in project\'s root folder',
-			'load' => 'load board from file in project\'s root folder',
-			'back' => 'cancel current action',
+			'help' 		=> 'returns a list of available actions',
+			'move' 		=> 'initiate piece moving sequence',
+			'resign' 	=> 'resign (concede) the game',
+			'draw' 		=> 'claim a draw if game is dragging for more than 50 turns',
+			'quit' 		=> 'quit the game',
+			'save' 		=> 'save board to file in project\'s root folder',
+			'load' 		=> 'load board from file in project\'s root folder',
+			'back' 		=> 'cancel current action',
 		}
 
 		@act_methods = {
 			'help' 		=> method('act_help'),
 			'quit' 		=> method('act_quit'),
 			'move' 		=> method('act_move'),
+			'm' 		=> method('act_move'),
 			'resign' 	=> method('act_resign_confirm'),
 			'draw' 		=> method('act_draw_confirm'),
 			'y' 		=> method('act_yes'),
@@ -64,7 +66,6 @@ class GameMode
 
 	
 
-
 	def begin_game()
 		@board_printer = BoardPrinter.new()
 		@piece_moves = PieceMoves.new(@board.board)
@@ -72,19 +73,15 @@ class GameMode
 		@board_printer.print_board_blueprint 
 		@board_printer.print_state_lines_blueprint
 		@turn_step = 'show_turn_result'
-
 		@player_to_act = opposite_player()
 		
 		act_confirm('')
 
 		action_success = true
-
 		while @winner_player == 0 do
 			render_turn_step()
 			action_success = execute_action(get_action)
-			unless action_success
-				@board_printer.set_line_result('Invalid action!')
-			end
+			@board_printer.set_line_result('Your input was invalid. Please try again') unless action_success
 		end
 		render_turn_step()
 	end
@@ -92,8 +89,8 @@ class GameMode
 
 	def prepare_next_turn
 		@board.process_tracker_state_lifetime()
-		
 		@board_printer.set_line_status('')
+		@board_printer.set_line_result('')
 		@player_to_act = opposite_player()
 		@turn_step = 'root'
 
@@ -113,29 +110,8 @@ class GameMode
 
 		if @board.is_king_checked(@player_range, @opponent_range, -@player_direction)
 			@board_printer.set_line_status('KING IN CHECK')
-			player_moves = @piece_moves.gen_move_hash(@player_range, @opponent_range, @player_direction, @board.special_move_log)
-			# opponent_moves = @piece_moves.gen_move_hash(@opponent_range, @player_range, -@player_direction, @board.special_move_log)
-			# opponent_moves = opponent_moves.values().flatten().uniq
-		
-			player_moves.each do |p_coord, p_moves|
-				p_moves.each do |p_move|
-					test_board = Board.new()
-					test_board.board = Marshal.load(Marshal.dump(@board.board))
-					test_board.special_move_log = Marshal.load(Marshal.dump(@board.special_move_log))
-					test_board.take_turn(p_coord, p_move)
-
-					next if test_board.is_king_checked(@player_range, @opponent_range, -@player_direction)
-
-					unless @current_moves.has_key?(p_coord)
-						@current_moves[p_coord] = []
-					end
-					@current_moves[p_coord].push(p_move)
-				end
-			end
-
-			if @current_moves.empty?
-				is_checkmate = true
-			end
+			set_king_check_moves()
+			is_checkmate = true if @current_moves.empty?
 		else
 			@current_moves = @piece_moves.gen_move_hash(@player_range, @opponent_range, @player_direction, @board.special_move_log)
 		end
@@ -150,11 +126,30 @@ class GameMode
 	end
 
 
+	def set_king_check_moves()
+		player_moves = @piece_moves.gen_move_hash(@player_range, @opponent_range, @player_direction, @board.special_move_log)
+		player_moves.each do |p_coord, p_moves|
+			p_moves.each do |p_move|
+				test_board = Board.new()
+				test_board.board = Marshal.load(Marshal.dump(@board.board))
+				test_board.special_move_log = Marshal.load(Marshal.dump(@board.special_move_log))
+				test_board.take_turn(p_coord, p_move)
+
+				next if test_board.is_king_checked(@player_range, @opponent_range, -@player_direction)
+
+				unless @current_moves.has_key?(p_coord)
+					@current_moves[p_coord] = []
+				end
+				@current_moves[p_coord].push(p_move)
+			end
+		end
+	end
+
+
 	def opposite_player()
 		return @player_to_act == 1 ? 2 : 1
 	end
 	
-
 
 
 
@@ -240,7 +235,7 @@ class GameMode
 
 	def act_confirm(action)
 		case @turn_step
-		when 'show_turn_result', 'root'
+		when 'show_turn_result'#, 'root'
 			@turn_step = 'root'
 			prepare_next_turn()
 			return true
@@ -261,41 +256,44 @@ class GameMode
 	end
 
 	def act_undefined(action)
-		if @board.is_valid_coord(action)
+		if Utility.is_valid_coord(action)
 			if @turn_step == 'choose_piece'
 				return act_choose_piece(action)
 			elsif @turn_step == 'choose_square'
 				return act_choose_square(action)
 			end
-		elsif is_path_valid(action)
+		elsif Utility.is_piece_code_valid(action, Utility.mk_promotion_array(@player_range))
+			if @turn_step == 'choose_promo'
+				
+				return act_promo_piece(action)
+			end
+		elsif Utility.is_path_valid(action)
 			if @turn_step == 'save_filepath'
 				return act_save(action)
 			elsif @turn_step == 'load_filepath'
 				return act_load(action)
 			end
-		elsif is_piece_code_valid(action, mk_promotion_array(@player_range))
-			if @turn_step == 'choose_promo'
-				act_promo_piece(action)
-			end
 		end
+		
+		@board_printer.set_line_result('Your input was invalid. Please try again')
 		return false
 	end
 
 	def act_choose_piece(action)
 		action = action.downcase
-		return false unless @current_moves.include?(@board.string_to_coord(action))
+		return false unless @current_moves.keys().any? { |e| Utility.coord_eql?(e, Utility.string_to_coord(action)) }
 		@turn_step = 'choose_square'
-		@chosen_piece = @board.string_to_coord(action)
+		@chosen_piece = Utility.string_to_coord(action)
 		return true
 	end
 
 	def act_choose_square(action)
 		action = action.downcase
-		target_coord = @board.string_to_coord(action)
-		return false unless @current_moves[@chosen_piece].any? { |e| e[0] == target_coord[0] && e[1] == target_coord[1]}
+		target_coord = Utility.string_to_coord(action)
+		return false unless @current_moves[@chosen_piece].any? { |e| Utility.coord_eql?(e, target_coord) }
 		@turn_step = 'show_turn_result'
-		target_coord = @current_moves[@chosen_piece].find { |e| e[0] == target_coord[0] && e[1] == target_coord[1]}
-		move_piece(target_coord)
+		target_coord = @current_moves[@chosen_piece].find { |e| Utility.coord_eql?(e, target_coord) }
+		act_move_piece(target_coord)
 		return true
 	end
 
@@ -324,12 +322,12 @@ class GameMode
 	end
 
 	def act_promo_piece(action)
-		@board.promote_piece(@chosen_piece, get_piece_code(action))
+		@board.promote_piece(@chosen_piece, Utility.get_piece_code(action))
 		@turn_step = 'show_turn_result'
 	end
 
 
-	def move_piece(coord)
+	def act_move_piece(coord)
 		@board.take_turn(@chosen_piece, coord)
 
 		case coord.fetch(2, '')
@@ -339,6 +337,8 @@ class GameMode
 		end
 		@turn_count += 1
 	end
+
+
 
 
 	def render_turn_step()
@@ -351,34 +351,35 @@ class GameMode
 		turn_text = @player_to_act == 1 ? 'WHITE turn' : 'BLACK turn'
 		@board_printer.set_line_turn(turn_text)
 		@board_printer.set_line_action('Type "help" for a list of actions')
+		@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('Choose an action:')
 	end
 
 	def turn_step_resign_confirm()
-		@board_printer.set_line_action('Resigning...')
-		@board_printer.set_line_result('Do you want to resign?')
+		@board_printer.set_line_action('Do you want to resign?')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('y/n:')
 	end
 
 	def turn_step_draw_confirm()
-		@board_printer.set_line_action('Claiming a draw...')
-		@board_printer.set_line_result('Do you want to claim a draw?')
+		@board_printer.set_line_action('Do you want to claim a draw?')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('y/n:')
 	end
 
 	def turn_step_resign()
 		turn_text = @winner_player == 1 ? 'WHITE won' : 'BLACK won'
 		@board_printer.set_line_status(turn_text)
-		@board_printer.set_line_action('Resigned!')
-		@board_printer.set_line_result('Your opponent won')
+		@board_printer.set_line_action('Resigned! Your opponent won')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('')
 	end
 	
 	def turn_step_draw()
 		turn_text = @winner_player == 1 ? 'WHITE won' : 'BLACK won'
 		@board_printer.set_line_status(turn_text)
-		@board_printer.set_line_action('Draw!')
-		@board_printer.set_line_result('It\'s a draw!')
+		@board_printer.set_line_action('It\'s a draw!')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('')
 	end
 
@@ -386,36 +387,36 @@ class GameMode
 		turn_text = @winner_player == 1 ? 'WHITE won' : 'BLACK won'
 		@board_printer.set_line_status(turn_text)
 		@board_printer.set_line_action('Checkmate!')
-		@board_printer.set_line_result('You lost')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('')
 	end
 
 
 	def turn_step_filepath()
-		@board_printer.set_line_action('Setting a filename...')
-		@board_printer.set_line_result('Choose a filename (without an extension)')
-		@board_printer.set_line_prompt('It will be saved under \'save\' folder')
+		@board_printer.set_line_action('Choose a filename (without an extension)')
+		#@board_printer.set_line_result('')
+		@board_printer.set_line_prompt('It will be saved/loaded under \'save\' folder')
 	end
 
 	def turn_step_choose_piece()
-		@board_printer.set_line_action('Choosing a piece...')
-		@board_printer.set_line_result('Use board coordinates to pick a piece')
+		@board_printer.set_line_action('Use board coordinates to pick a piece')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('E.g. "d6" would choose 4th column, 6th row:')
 		@board_printer.show_moveable_pieces(@current_moves.keys())
 	end
 
 	def turn_step_choose_square()
-		@board_printer.set_line_action('Choosing a square...')
-		@board_printer.set_line_result('Use board coordinates to move a piece')
+		@board_printer.set_line_action('Use board coordinates to move a piece.')
+		#@board_printer.set_line_result('')
 		@board_printer.set_line_prompt('E.g. "d6" would choose 4th column, 6th row:')
 		@board_printer.show_moveable_pieces([@chosen_piece])
 		@board_printer.show_target_squares(@current_moves[@chosen_piece])
 	end
 
 	def turn_step_choose_promo()
-		@board_printer.set_line_action('Promoting a pawn...')
-		@board_printer.set_line_result('Enter a piece code to promote')
-		promo_array = mk_promotion_array(@player_range)
+		@board_printer.set_line_action('Enter a piece code to promote this pawn')
+		#@board_printer.set_line_result('')
+		promo_array = Utility.mk_promotion_array(@player_range)
 		line = ''
 		for piece_code in promo_array
 			line += "#{piece_code} - #{@board_printer.piece_lookup[piece_code]}, " 
@@ -425,7 +426,6 @@ class GameMode
 	end
 
 	def turn_step_show_turn_result()
-		@board_printer.set_line_action('')
 		@board_printer.set_line_result('Moved a piece!')
 		@board_printer.set_line_prompt('Press ENTER to continue')
 	end
@@ -436,48 +436,10 @@ class GameMode
 
 	
 
-	def set_lines(line_overrides = {})
-		line_overrides.each do |key, value|
-			case key
-			when 'status'
-				@board_printer.set_line_status(value)
-			when 'turn'
-				@board_printer.set_line_turn(value)
-			when 'action'
-				@board_printer.set_line_action(value)
-			when 'result'
-				@board_printer.set_line_result(value)
-			when 'prompt'
-				@board_printer.set_line_prompt(value)
-			end
-		end
-	end
-
-
 	def get_action
 		action = gets.chomp
 		@board_printer.set_line_at_offset(1, "", true)
 		return action
-	end
-
-
-	def is_path_valid(filename)
-		return filename.gsub(/[\x00\/\\:\*\?\"<>\|]/, '_') == filename
-	end
-
-
-	def is_piece_code_valid(action, piece_array)
-		return piece_array.include?(action.to_i)
-	end
-
-
-	def get_piece_code(action)
-		return action.to_i
-	end
-
-
-	def mk_promotion_array(piece_range)
-		return piece_range.select { |e| e % 10 != 1 && e % 10 != 6 }
 	end
 
 end
